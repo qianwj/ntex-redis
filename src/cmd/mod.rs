@@ -12,6 +12,7 @@ mod lists;
 mod pubsub;
 mod strings;
 mod utils;
+pub mod stream;
 
 pub use self::auth::Auth;
 pub use self::connection::{Ping, Reset, Select};
