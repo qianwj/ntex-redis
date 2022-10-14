@@ -32,10 +32,27 @@ impl XInfoCommand {
   }
 
   fn parse_response(items: Vec<Response>) -> Result<XInfoItem, CommandError> {
+    if items.is_empty() {
+      return Ok(XInfoItem::None)
+    }
     let first: &Response = items.first().unwrap();
+    let resp = Response::Array(items.clone());
     match first {
-      Response::Bytes(_) => Self::parse_stream_response(items),
-      Response::Array(_) => Self::parse_groups_response(Response::Array(items)),
+      Response::Bytes(_) => Self::parse_stream_response(items.clone()),
+      Response::Array(_) => {
+        let result = Self::parse_groups_response(resp.clone());
+        match result {
+          Ok(info) => Ok(info),
+          Err(e) => {
+            if let CommandError::Output(msg, _) = e.clone() {
+              if msg == "Should be consumer info" {
+                return Self::parse_consumers_response(resp.clone())
+              }
+            }
+            Err(e.clone())
+          }
+        }
+      },
       _ => Err(CommandError::Output("Unknown Stream Info Key", first.clone()))
     }
   }
@@ -75,6 +92,11 @@ impl XInfoCommand {
   fn parse_groups_response(resp: Response) -> Result<XInfoItem, CommandError> {
     let data = Vec::try_from(resp)?;
     Ok(XInfoItem::Groups(data))
+  }
+
+  fn parse_consumers_response(resp: Response) -> Result<XInfoItem, CommandError> {
+    let data = Vec::try_from(resp)?;
+    Ok(XInfoItem::Consumers(data))
   }
 }
 
@@ -123,6 +145,7 @@ pub enum XInfoItem {
   Stream(XInfoStream),
   Groups(Vec<XInfoGroup>),
   Consumers(Vec<XInfoConsumer>),
+  None,
 }
 
 #[derive(Debug)]
@@ -261,20 +284,20 @@ impl TryFrom<Response> for XInfoGroup {
   type Error = (&'static str, Response);
 
   fn try_from(resp: Response) -> Result<Self, Self::Error> {
-    match resp {
+    match resp.clone() {
       Response::Array(items) => {
         let data = parse_response_to_map(items)?;
         let name = ByteString::try_from(data.get("name").unwrap().clone())?.to_string();
-        let consumers = i64::try_from(data.get("consumers").unwrap().clone())?;
+        let consumers = if let Some(consumers_value) = data.get("consumers") {
+          i64::try_from(consumers_value.clone())?
+        } else {
+          return Err(("Should be consumer info", resp.clone()))
+        };
         let pending = i64::try_from(data.get("pending").unwrap().clone())?;
         let last_delivered_id = ByteString::try_from(data.get("last-delivered-id").unwrap().clone())?.to_string();
         let lag = i64::try_from(data.get("lag").unwrap().clone())?;
-        let entries_read = data.get("entries-read").map(|v| {
-          match v {
-            Response::Integer(v) => Some(v.clone()),
-            _ => None,
-          }
-        }).map_or(None, |v| v);
+        let entries_read: Option<i64> = data.get("entries-read")
+            .map(|v| i64::try_from(v.clone()).ok()).map_or(None, |v| v);
         Ok(XInfoGroup { name, consumers, pending, last_delivered_id, lag, entries_read })
       }
       _ => Err(("Unexpected Value Type, Want array", resp.clone()))
@@ -285,8 +308,25 @@ impl TryFrom<Response> for XInfoGroup {
 #[derive(Debug)]
 pub struct XInfoConsumer {
   name: String,
-  pending: usize,
-  idle: usize,
+  pending: i64,
+  idle: i64,
+}
+
+impl TryFrom<Response> for XInfoConsumer {
+  type Error = (&'static str, Response);
+
+  fn try_from(resp: Response) -> Result<Self, Self::Error> {
+    match resp {
+      Response::Array(items) => {
+        let data = parse_response_to_map(items)?;
+        let name = ByteString::try_from(data.get("name").unwrap().clone())?.to_string();
+        let pending = i64::try_from(data.get("pending").unwrap().clone())?;
+        let idle = i64::try_from(data.get("idle").unwrap().clone())?;
+        Ok(XInfoConsumer{ name, pending, idle })
+      }
+      _ => Err(("Unexpected Value Type, Want array", resp.clone()))
+    }
+  }
 }
 
 #[derive(Debug)]
