@@ -31,6 +31,8 @@
 //! ```
 #![allow(clippy::return_self_not_must_use)]
 
+extern crate core;
+
 mod client;
 pub mod cmd;
 pub mod codec;
